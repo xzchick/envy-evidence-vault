@@ -175,12 +175,14 @@ class EvidenceTest(unittest.TestCase):
         self.assertIn("limitations", report)
 
     def test_export_escapes_markup(self):
+        # Operator-supplied text (here a custodian label) must be HTML-escaped. The label
+        # carries the markup rather than the filename, since some filesystems reject "<>".
         vault = self.make_vault()
-        core.intake(vault, self.source_file("<script>.txt", b"x"), self.SECRET)
+        core.intake(vault, self.source_file("photo.jpg", b"x"), self.SECRET, custodian="<script>alert(1)</script>")
         out = self.dir / "r.html"
         core.export(vault, out, self.SECRET, "html")
         body = out.read_text()
-        self.assertNotIn("<script>.txt", body)
+        self.assertNotIn("<script>alert(1)</script>", body)
         self.assertIn("&lt;script&gt;", body)
 
     # ----- no overwrite -------------------------------------------------
