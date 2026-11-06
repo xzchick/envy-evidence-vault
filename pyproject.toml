@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "envy-evidence-vault"
+version = "0.1.0"
+description = "ENVY Evidence Vault: offline, encrypted copied-file intake with a hash-verified, revision-preserving custody journal, in a native app window"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "cryptography>=42,<47",
+  "PyQt6>=6.7,<7",
+]
+
+[project.scripts]
+envy-evidence-vault = "envy_evidence_vault.cli:main"
+
+[project.gui-scripts]
+envy-evidence-vault-gui = "envy_evidence_vault.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["envy_evidence_vault*"]
