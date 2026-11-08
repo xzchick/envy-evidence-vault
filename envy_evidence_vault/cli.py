@@ -13,7 +13,8 @@ import sys
 
 from . import __version__
 from .core import (EvidenceError, check_passphrase, create, export, inspect,
-                   intake, note, read_regular, transfer, verify, verify_against_list)
+                   intake, intake_dir, note, read_regular, transfer, verify,
+                   verify_against_list)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +36,13 @@ def build_parser() -> argparse.ArgumentParser:
     take.add_argument("source", help="the file to intake")
     take.add_argument("--custodian", default="", help="an optional custodian label")
     take.add_argument("--note", default="", help="an optional note")
+
+    takedir = commands.add_parser("intake-dir",
+                                  help="intake every regular file under a folder in one revision")
+    takedir.add_argument("vault")
+    takedir.add_argument("folder", help="the folder whose files to intake (recursive)")
+    takedir.add_argument("--custodian", default="", help="an optional custodian label for all of them")
+    takedir.add_argument("--note", default="", help="an optional note for all of them")
 
     ver = commands.add_parser("verify", help="re-hash every stored object and log the result")
     ver.add_argument("vault")
@@ -101,6 +109,12 @@ def _run(args) -> int:
     if args.command == "export":
         result = export(args.vault, args.destination, _passphrase(), args.format)
         print(f"export ({result['format']}): wrote {result['output']}  sha256 {result['sha256']}")
+        return 0
+    if args.command == "intake-dir":
+        result = intake_dir(args.vault, args.folder, _passphrase(), args.custodian, args.note)
+        dups = sum(1 for i in result["items"] if i["duplicate_object"])
+        print(f"intake-dir: {result['intaken']} file(s) in → revision {result['revision']} "
+              f"({dups} duplicate object(s) referenced)")
         return 0
     if args.command == "verify-list":
         lines = read_regular(args.list).decode("utf-8", "replace").splitlines()
