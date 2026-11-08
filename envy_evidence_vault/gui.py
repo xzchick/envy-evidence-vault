@@ -387,10 +387,12 @@ def _build():
             if not self.data:
                 return
             d = self.data
+            ev = core.evidence(d)
+            total = sum(e["size"] for e in ev)
             self.vault_header.setPlainText(
-                f"{d['title']}  ·  revision {d['revision']}  ·  {len(core.evidence(d))} file(s)\n"
+                f"{d['title']}  ·  revision {d['revision']}  ·  {len(ev)} object(s)  ·  {total:,} bytes\n"
                 f"Vault: {d['vault_id']}")
-            self._fill_evidence(core.evidence(d))
+            self._fill_evidence(ev)
             self._fill_log(core.custody_log(d))
             if self.vault:
                 self.path_label.setText(str(self.vault))
