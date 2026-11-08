@@ -25,6 +25,7 @@ import html
 import io
 import json
 import os
+import re
 import stat
 import uuid
 from pathlib import Path
@@ -410,6 +411,47 @@ def evidence(data):
                                    "source_path": record.get("source_path", ""),
                                    "last_verified_utc": last_status.get(sha, "")})
     return list(items.values())
+
+
+_HASH_RE = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def _parse_hash_list(lines):
+    """Pull the SHA-256 digests out of a list of text lines. Forgiving of format:
+    plain one-per-line, `sha256sum` output (hash then filename), or a CSV with a
+    hash column all work — any 64-hex token on a line is taken, others skipped."""
+    digests = []
+    for raw in lines:
+        match = _HASH_RE.search(raw)
+        if match:
+            digests.append(match.group(0).lower())
+    return digests
+
+
+def verify_against_list(vault, secret, expected):
+    """Reconcile the vault's intaken objects against an expected list of SHA-256
+    digests. Read-only, and it compares *identities* — which expected files were
+    taken in, which are absent, and which vault objects are not on the list. It
+    does not re-hash the stored bytes; run verify() for that.
+
+    `expected` is an iterable of text lines (see _parse_hash_list).
+    """
+    data, _ = _load(vault, secret)
+    names = {e["object_sha256"]: e["filename"] for e in evidence(data)}
+    in_vault = set(names)
+    want, seen = [], set()
+    for digest in _parse_hash_list(expected):
+        if digest not in seen:
+            seen.add(digest); want.append(digest)
+    present = [{"object_sha256": h, "filename": names[h]} for h in want if h in in_vault]
+    missing = [h for h in want if h not in in_vault]
+    extra = [{"object_sha256": h, "filename": names[h]} for h in sorted(in_vault - seen)]
+    return {"vault": str(vault), "expected": len(want), "in_vault": len(in_vault),
+            "present": present, "missing": missing, "extra": extra,
+            "match": not missing and not extra,
+            "basis": "Compares SHA-256 identities only: which expected files were taken in, which are "
+                     "absent, and which vault objects are not on the list. It does not re-hash the stored "
+                     "bytes — run verify for that — and a digest proves integrity, not provenance."}
 
 
 def custody_log(data):

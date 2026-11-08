@@ -13,7 +13,7 @@ import sys
 
 from . import __version__
 from .core import (EvidenceError, check_passphrase, create, export, inspect,
-                   intake, note, transfer, verify)
+                   intake, note, read_regular, transfer, verify, verify_against_list)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     ver = commands.add_parser("verify", help="re-hash every stored object and log the result")
     ver.add_argument("vault")
     ver.add_argument("--no-record", action="store_true", help="check without writing a verification record")
+
+    vl = commands.add_parser("verify-list",
+                             help="reconcile the vault against an expected list of SHA-256 digests (read-only)")
+    vl.add_argument("vault")
+    vl.add_argument("list", help="a text file of SHA-256 digests (plain, sha256sum output, or a CSV with a hash column)")
 
     tr = commands.add_parser("transfer", help="record a custody transfer (a label, not an identity)")
     tr.add_argument("vault")
@@ -97,6 +102,13 @@ def _run(args) -> int:
         result = export(args.vault, args.destination, _passphrase(), args.format)
         print(f"export ({result['format']}): wrote {result['output']}  sha256 {result['sha256']}")
         return 0
+    if args.command == "verify-list":
+        lines = read_regular(args.list).decode("utf-8", "replace").splitlines()
+        result = verify_against_list(args.vault, _passphrase(), lines)
+        print(f"verify-list: {len(result['present'])} present, {len(result['missing'])} missing, "
+              f"{len(result['extra'])} extra (of {result['expected']} expected, {result['in_vault']} in vault)")
+        print(json.dumps({k: result[k] for k in ("missing", "extra")}, indent=2, ensure_ascii=False))
+        return 0 if result["match"] else 1
     if args.command == "inspect":
         print(json.dumps(inspect(args.vault, _passphrase()), indent=2, ensure_ascii=False))
         return 0
