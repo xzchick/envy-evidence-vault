@@ -174,6 +174,25 @@ class EvidenceTest(unittest.TestCase):
         self.assertEqual(report["vault"]["revision"], 1)
         self.assertIn("limitations", report)
 
+    def test_export_csv_manifest(self):
+        import csv as _csv
+        vault = self.make_vault()
+        core.intake(vault, self.source_file("a.jpg", b"img"), self.SECRET, custodian="Raven")
+        out = self.dir / "manifest.csv"
+        res = core.export(vault, out, self.SECRET, "csv")
+        self.assertEqual(res["format"], "csv")
+        rows = list(_csv.reader(out.read_text().splitlines()))
+        self.assertEqual(rows[0][:4], ["filename", "object_sha256", "size", "custodian"])
+        self.assertEqual(rows[1][0], "a.jpg")
+        self.assertEqual(rows[1][3], "Raven")
+
+    def test_csv_guards_formula_injection(self):
+        vault = self.make_vault()
+        core.intake(vault, self.source_file("b.jpg", b"x"), self.SECRET, custodian="=SUM(A1)")
+        out = self.dir / "m.csv"
+        core.export(vault, out, self.SECRET, "csv")
+        self.assertIn("'=SUM(A1)", out.read_text())
+
     def test_export_escapes_markup(self):
         # Operator-supplied text (here a custodian label) must be HTML-escaped. The label
         # carries the markup rather than the filename, since some filesystems reject "<>".
