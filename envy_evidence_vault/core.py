@@ -332,6 +332,68 @@ def intake(vault, source, secret, custodian="", note=""):
             "duplicate_object": duplicate, "revision": data["revision"], "record_id": record["id"]}
 
 
+def _folder_files(folder):
+    """Every regular file under ``folder``, sorted, never following symlinks."""
+    root = Path(folder).expanduser()
+    if not root.is_dir():
+        raise EvidenceError("Bulk intake needs an existing folder")
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames.sort()
+        for name in sorted(filenames):
+            full = Path(dirpath) / name
+            try:
+                if stat.S_ISREG(full.lstat().st_mode):
+                    found.append(full)
+            except OSError:
+                continue
+    return found
+
+
+def intake_many(vault, sources, secret, custodian="", note=""):
+    """Intake several files in one new revision, chaining one record per file.
+
+    Objects are de-duplicated by content hash (a repeated file is referenced, not
+    copied again), and the whole batch is written as a single preserved revision.
+    """
+    sources = list(sources)
+    data, envelope = _load(vault, secret)
+    if len(data["records"]) + len(sources) > MAX_RECORDS:
+        raise EvidenceError(f"Manifest would exceed its {MAX_RECORDS} record limit")
+    items = []
+    for source in sources:
+        payload = read_regular(source, MAX_OBJECT)
+        object_sha256 = hashlib.sha256(payload).hexdigest()
+        object_path = _object_path(vault, object_sha256)
+        duplicate = object_path.exists()
+        if not duplicate:
+            new_file(object_path, encrypt_bytes(payload, secret))
+        value = {"kind": "intake", "title": Path(source).name or "evidence",
+                 "object_sha256": object_sha256, "filename": Path(source).name or "evidence",
+                 "size": len(payload), "source_path": str(Path(source).expanduser())}
+        if custodian:
+            value["custodian"] = custodian
+        if note:
+            value["note"] = note
+        known = {r["object_sha256"] for r in data["records"] if r["kind"] == "intake"}
+        record = _validate_record(value, known)
+        record.update(id=str(uuid.uuid4()), recorded_utc=_utc(),
+                      previous_sha256=data["records"][-1]["record_sha256"] if data["records"] else "0" * 64)
+        record["record_sha256"] = hashlib.sha256(_canonical(record)).hexdigest()
+        data["records"].append(record)
+        data["revision"] += 1
+        items.append({"object_sha256": object_sha256, "filename": value["filename"],
+                      "size": len(payload), "duplicate_object": duplicate})
+    data["previous_envelope_sha256"] = envelope
+    _save(vault, data, secret)
+    return {"vault": str(vault), "intaken": len(items), "revision": data["revision"], "items": items}
+
+
+def intake_dir(vault, folder, secret, custodian="", note=""):
+    """Intake every regular file under a folder (recursive) in one revision."""
+    return intake_many(vault, _folder_files(folder), secret, custodian, note)
+
+
 def _verify_object(vault, object_sha256, size, secret):
     object_path = _object_path(vault, object_sha256)
     if not object_path.exists():

@@ -249,6 +249,37 @@ class EvidenceTest(unittest.TestCase):
         self.assertEqual(result["expected"], 1)   # the hash is de-duplicated
         self.assertTrue(result["match"])
 
+    # ----- bulk intake (v0.2) ------------------------------------------
+    def test_intake_dir_brings_in_every_file_in_one_revision(self):
+        vault = self.make_vault()
+        folder = self.dir / "incoming"
+        (folder / "sub").mkdir(parents=True)
+        (folder / "a.jpg").write_bytes(b"alpha")
+        (folder / "b.txt").write_bytes(b"beta!")
+        (folder / "sub" / "c.bin").write_bytes(b"alpha")   # same bytes as a.jpg
+        result = core.intake_dir(vault, folder, self.SECRET, custodian="Raven")
+        self.assertEqual(result["intaken"], 3)
+        self.assertEqual(result["revision"], 3)            # three records, one atomic save
+        self.assertEqual(sum(1 for i in result["items"] if i["duplicate_object"]), 1)
+        objects = list((vault / core.OBJECTS_DIR).glob("*.evobj"))
+        self.assertEqual(len(objects), 2)                  # deduped by content
+        v = core.verify(vault, self.SECRET)
+        self.assertEqual((v["mismatch"], v["missing"]), (0, 0))
+
+    def test_intake_many_chains_the_journal(self):
+        vault = self.make_vault()
+        result = core.intake_many(vault, [self.source_file("a", b"one"), self.source_file("b", b"two")],
+                                  self.SECRET)
+        self.assertEqual(result["intaken"], 2)
+        data, _ = core._load(vault, self.SECRET)
+        self.assertEqual(data["revision"], 2)
+        self.assertEqual(data["records"][1]["previous_sha256"], data["records"][0]["record_sha256"])
+
+    def test_intake_dir_requires_a_folder(self):
+        vault = self.make_vault()
+        with self.assertRaises(EvidenceError):
+            core.intake_dir(vault, self.dir / "does-not-exist", self.SECRET)
+
 
 if __name__ == "__main__":
     unittest.main()
