@@ -220,6 +220,35 @@ class EvidenceTest(unittest.TestCase):
             core.export(vault, dest, self.SECRET, "html")
         self.assertEqual(dest.read_bytes(), b"keep me")
 
+    # ----- verify against an expected list (v0.2) ----------------------
+    def test_verify_against_list_reports_present_missing_extra(self):
+        vault = self.make_vault()
+        a = core.intake(vault, self.source_file("a.jpg", b"alpha"), self.SECRET)["object_sha256"]
+        b = core.intake(vault, self.source_file("b.jpg", b"beta!"), self.SECRET)["object_sha256"]
+        missing = hashlib.sha256(b"never taken in").hexdigest()
+        lines = ["# an expected-evidence list", f"{a}  a.jpg", missing, ""]
+        result = core.verify_against_list(vault, self.SECRET, lines)
+        self.assertEqual(result["expected"], 2)
+        self.assertEqual([p["object_sha256"] for p in result["present"]], [a])
+        self.assertEqual(result["missing"], [missing])
+        self.assertEqual([e["object_sha256"] for e in result["extra"]], [b])  # in vault, off the list
+        self.assertFalse(result["match"])
+
+    def test_verify_against_list_match_is_case_insensitive(self):
+        vault = self.make_vault()
+        a = core.intake(vault, self.source_file("a", b"x"), self.SECRET)["object_sha256"]
+        result = core.verify_against_list(vault, self.SECRET, [a.upper()])
+        self.assertTrue(result["match"])
+        self.assertEqual(result["present"][0]["filename"], "a")
+
+    def test_verify_against_list_parses_csv_and_sha256sum(self):
+        vault = self.make_vault()
+        a = core.intake(vault, self.source_file("a", b"x"), self.SECRET)["object_sha256"]
+        lines = ["filename,object_sha256,size", f"a,{a},1", f"{a}  ./a"]  # header + CSV row + sha256sum line
+        result = core.verify_against_list(vault, self.SECRET, lines)
+        self.assertEqual(result["expected"], 1)   # the hash is de-duplicated
+        self.assertTrue(result["match"])
+
 
 if __name__ == "__main__":
     unittest.main()
