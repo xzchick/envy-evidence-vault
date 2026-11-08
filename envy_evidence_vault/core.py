@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import csv
 import html
+import io
 import json
 import os
 import stat
@@ -434,8 +436,8 @@ def inspect_vault(vault, secret):
 # --- Plaintext export --------------------------------------------------------
 
 def export(vault, destination, secret, format="html"):
-    if format not in ("html", "json"):
-        raise EvidenceError("Export format must be html or json")
+    if format not in ("html", "json", "csv"):
+        raise EvidenceError("Export format must be html, json or csv")
     data, envelope = _load(vault, secret)
     items, log = evidence(data), custody_log(data)
     report = {"vault": {"vault_id": data["vault_id"], "title": data["title"],
@@ -446,6 +448,21 @@ def export(vault, destination, secret, format="html"):
                              "are operator assertions, and the hash chain does not establish a trusted time."}
     if format == "json":
         output = (json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    elif format == "csv":
+        def _safe(value):
+            # Prefix a leading =,+,-,@ so a spreadsheet cannot treat a field as a formula.
+            text = str(value)
+            return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["filename", "object_sha256", "size", "custodian",
+                         "intake_utc", "last_verified_utc", "source_path"])
+        for item in items:
+            writer.writerow([_safe(item["filename"]), item["object_sha256"], item["size"],
+                             _safe(item["custodian"]), item["intake_utc"],
+                             item["last_verified_utc"] or "", _safe(item.get("source_path", ""))])
+        output = buf.getvalue().encode("utf-8")
     else:
         def esc(value):
             return html.escape(str(value), quote=True)
