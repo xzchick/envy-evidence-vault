@@ -540,8 +540,8 @@ def inspect_vault(vault, secret):
 # --- Plaintext export --------------------------------------------------------
 
 def export(vault, destination, secret, format="html"):
-    if format not in ("html", "json", "csv"):
-        raise EvidenceError("Export format must be html, json or csv")
+    if format not in ("html", "json", "csv", "md"):
+        raise EvidenceError("Export format must be html, json, csv or md")
     data, envelope = _load(vault, secret)
     items, log = evidence(data), custody_log(data)
     report = {"vault": {"vault_id": data["vault_id"], "title": data["title"],
@@ -567,6 +567,34 @@ def export(vault, destination, secret, format="html"):
                              _safe(item["custodian"]), item["intake_utc"],
                              item["last_verified_utc"] or "", _safe(item.get("source_path", ""))])
         output = buf.getvalue().encode("utf-8")
+    elif format == "md":
+        def cell(value):
+            return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+        lines = [f"# {data['title']}", "", report["limitations"], "",
+                 f"- **Vault:** `{data['vault_id']}`",
+                 f"- **Revision:** {data['revision']}",
+                 f"- **Created:** {data['created_utc']}",
+                 f"- **Encrypted source SHA-256:** `{envelope}`", "",
+                 f"## Evidence ({len(items)})", ""]
+        if items:
+            lines.append("| Filename | SHA-256 | Size | Custodian | Intake UTC | Last verified |")
+            lines.append("| --- | --- | --- | --- | --- | --- |")
+            for item in items:
+                lines.append(f"| {cell(item['filename'])} | `{item['object_sha256']}` | {item['size']} | "
+                             f"{cell(item['custodian'])} | {item['intake_utc']} | "
+                             f"{item['last_verified_utc'] or '—'} |")
+        else:
+            lines.append("_No evidence._")
+        lines += ["", f"## Custody log ({len(log)})", ""]
+        for entry in log:
+            parts = [entry["recorded_utc"], f"**{entry['kind']}**", cell(entry["title"])]
+            if entry.get("custodian"):
+                parts.append(f"custodian: {cell(entry['custodian'])}")
+            if entry.get("note"):
+                parts.append(cell(entry["note"]))
+            lines.append("- " + " · ".join(parts))
+        output = ("\n".join(lines) + "\n").encode("utf-8")
     else:
         def esc(value):
             return html.escape(str(value), quote=True)

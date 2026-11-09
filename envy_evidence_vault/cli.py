@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     exp = commands.add_parser("export", help="write a plaintext HTML, JSON or CSV report")
     exp.add_argument("vault")
     exp.add_argument("destination", help="a new report file; never overwritten")
-    exp.add_argument("--format", default="html", choices=("html", "json", "csv"))
+    exp.add_argument("--format", default="html", choices=("html", "json", "csv", "md"))
     return root
 
 

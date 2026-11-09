@@ -280,6 +280,27 @@ class EvidenceTest(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             core.intake_dir(vault, self.dir / "does-not-exist", self.SECRET)
 
+    # ----- Markdown export (v0.2) --------------------------------------
+    def test_export_markdown(self):
+        vault = self.make_vault(title="Night shift")
+        core.intake(vault, self.source_file("photo.jpg", b"bytes"), self.SECRET, custodian="Raven")
+        out = self.dir / "r.md"
+        res = core.export(vault, out, self.SECRET, "md")
+        self.assertEqual(res["format"], "md")
+        text = out.read_text()
+        self.assertTrue(text.startswith("# Night shift"))
+        self.assertIn("## Evidence (1)", text)
+        self.assertIn("photo.jpg", text)
+        self.assertIn("| Filename | SHA-256 |", text)
+        self.assertIn("## Custody log", text)
+
+    def test_export_markdown_escapes_table_pipes(self):
+        vault = self.make_vault()
+        core.intake(vault, self.source_file("a.jpg", b"x"), self.SECRET, custodian="Raven|Wren")
+        out = self.dir / "p.md"
+        core.export(vault, out, self.SECRET, "md")
+        self.assertIn("Raven\\|Wren", out.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
