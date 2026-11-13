@@ -43,6 +43,52 @@ class EvidenceTest(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             core.create(self.dir / "short", "Case", b"tooshort")
 
+    # ----- optional journal signature (v0.2) ---------------------------
+    def test_sign_and_verify_journal(self):
+        vault = self.make_vault()
+        core.intake(vault, self.source_file("a.bin", b"alpha"), self.SECRET, "Raven")
+        key = self.dir / "sign.key"
+        keyinfo = core.generate_signing_key(key)
+        self.assertEqual(len(bytes.fromhex(keyinfo["public_key"])), 32)
+        sig = self.dir / "vault.sig"
+        signed = core.sign_journal(vault, self.SECRET, key, sig)
+        # A fresh signature over the current journal is valid.
+        result = core.verify_journal_signature(vault, self.SECRET, sig)
+        self.assertTrue(result["valid"])
+        self.assertTrue(result["signature_ok"])
+        self.assertTrue(result["matches_current_journal"])
+        self.assertEqual(result["public_key"], signed["public_key"])
+        # Pinning to the correct public key still verifies; a wrong key is refused.
+        self.assertTrue(core.verify_journal_signature(vault, self.SECRET, sig,
+                                                      public_key=signed["public_key"])["valid"])
+        self.assertFalse(core.verify_journal_signature(vault, self.SECRET, sig,
+                                                       public_key="00" * 32)["valid"])
+
+    def test_signature_stale_after_new_record(self):
+        vault = self.make_vault()
+        core.intake(vault, self.source_file("a.bin", b"alpha"), self.SECRET, "Raven")
+        key = self.dir / "sign.key"; core.generate_signing_key(key)
+        sig = self.dir / "vault.sig"; core.sign_journal(vault, self.SECRET, key, sig)
+        # Adding a record advances the hash-chain head, so the old signature no longer
+        # matches the current journal (the signature itself is still cryptographically ok).
+        core.intake(vault, self.source_file("b.bin", b"beta"), self.SECRET, "Wren")
+        result = core.verify_journal_signature(vault, self.SECRET, sig)
+        self.assertTrue(result["signature_ok"])
+        self.assertFalse(result["matches_current_journal"])
+        self.assertFalse(result["valid"])
+
+    def test_signature_rejects_tampered_fields(self):
+        vault = self.make_vault()
+        core.intake(vault, self.source_file("a.bin", b"alpha"), self.SECRET, "Raven")
+        key = self.dir / "sign.key"; core.generate_signing_key(key)
+        sig = self.dir / "vault.sig"; core.sign_journal(vault, self.SECRET, key, sig)
+        data = json.loads(sig.read_text())
+        data["journal_head"] = "f" * 64                 # forge the signed head
+        forged = self.dir / "forged.sig"; forged.write_text(json.dumps(data))
+        result = core.verify_journal_signature(vault, self.SECRET, forged)
+        self.assertFalse(result["signature_ok"])        # signature no longer matches the message
+        self.assertFalse(result["valid"])
+
     # ----- create -------------------------------------------------------
     def test_create_lays_out_vault(self):
         vault = self.make_vault(title="Night shift")
