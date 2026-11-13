@@ -12,9 +12,9 @@ import json
 import sys
 
 from . import __version__
-from .core import (EvidenceError, check_passphrase, create, export, inspect,
-                   intake, intake_dir, note, read_regular, transfer, verify,
-                   verify_against_list)
+from .core import (EvidenceError, check_passphrase, create, export, generate_signing_key,
+                   inspect, intake, intake_dir, note, read_regular, sign_journal, transfer,
+                   verify, verify_against_list, verify_journal_signature)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -71,6 +71,21 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("vault")
     exp.add_argument("destination", help="a new report file; never overwritten")
     exp.add_argument("--format", default="html", choices=("html", "json", "csv", "md"))
+
+    sk = commands.add_parser("sign-key", help="create a new Ed25519 signing key (no passphrase needed)")
+    sk.add_argument("destination", help="a new key file; never overwritten")
+
+    sg = commands.add_parser("sign", help="write a detached Ed25519 signature over the custody journal")
+    sg.add_argument("vault")
+    sg.add_argument("destination", help="a new signature file; never overwritten")
+    sg.add_argument("--key", required=True, metavar="KEYFILE", help="the Ed25519 signing key (from sign-key)")
+
+    vs = commands.add_parser("verify-signature",
+                             help="verify a detached journal signature (exit 1 if invalid)")
+    vs.add_argument("vault")
+    vs.add_argument("signature", help="the signature file to check")
+    vs.add_argument("--public-key", default=None, metavar="HEX",
+                    help="require the signature to come from this public key (hex)")
     return root
 
 
@@ -126,6 +141,24 @@ def _run(args) -> int:
     if args.command == "inspect":
         print(json.dumps(inspect(args.vault, _passphrase()), indent=2, ensure_ascii=False))
         return 0
+    if args.command == "sign-key":
+        result = generate_signing_key(args.destination)
+        print(f"signing key → {result['output']}")
+        print(f"public key: {result['public_key']}")
+        print("Keep the key file private; share the public key with verifiers.")
+        return 0
+    if args.command == "sign":
+        result = sign_journal(args.vault, _passphrase(), args.key, args.destination)
+        print(f"signed journal head {result['journal_head']} → {result['output']}")
+        print(f"public key: {result['public_key']}")
+        print(result["note"])
+        return 0
+    if args.command == "verify-signature":
+        result = verify_journal_signature(args.vault, _passphrase(), args.signature,
+                                          public_key=args.public_key)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print("VALID" if result["valid"] else "INVALID", file=sys.stderr)
+        return 0 if result["valid"] else 1
     return 0
 
 

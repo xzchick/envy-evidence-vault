@@ -249,6 +249,89 @@ def _validate_manifest(data):
     return data
 
 
+# --- Optional Ed25519 signature over the custody journal ---------------------
+
+SIGNATURE_SCHEMA = 1
+
+
+def _journal_head(data):
+    records = data["records"]
+    return records[-1]["record_sha256"] if records else "0" * 64
+
+
+def _signed_message(vault_id, revision, journal_head):
+    return _canonical({"vault_id": vault_id, "revision": revision, "journal_head": journal_head})
+
+
+def generate_signing_key(destination):
+    """Write a new Ed25519 signing key (32 raw private bytes, mode 0600) to a new file and
+    return its public key as hex to share with verifiers."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    new_file(destination, key.private_bytes_raw(), mode=0o600)
+    return {"output": str(Path(destination).expanduser()),
+            "public_key": key.public_key().public_bytes_raw().hex()}
+
+
+def sign_journal(vault, secret, key_path, destination):
+    """Sign the vault's current journal state — its id, revision and hash-chain head — with
+    an Ed25519 key, writing a detached signature file (nothing in the vault changes). The
+    signature attests *who signed this exact journal state*, not where the evidence came
+    from."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    data, _ = _load(vault, secret)
+    raw = read_regular(key_path, 1024)
+    if len(raw) != 32:
+        raise EvidenceError("Signing key must be 32 raw bytes (create one with 'sign-key')")
+    key = Ed25519PrivateKey.from_private_bytes(raw)
+    head = _journal_head(data)
+    signature = {"signature_schema": SIGNATURE_SCHEMA, "vault_id": data["vault_id"],
+                 "revision": data["revision"], "journal_head": head, "signed_utc": _utc(),
+                 "public_key": key.public_key().public_bytes_raw().hex(),
+                 "signature": key.sign(_signed_message(data["vault_id"], data["revision"], head)).hex()}
+    new_file(destination, (json.dumps(signature, indent=2) + "\n").encode("utf-8"))
+    return {"output": str(Path(destination).expanduser()), "journal_head": head,
+            "public_key": signature["public_key"],
+            "note": "A signature attests who signed this journal state, not the origin of the evidence."}
+
+
+def verify_journal_signature(vault, secret, signature_path, public_key=None):
+    """Verify a detached journal signature against the vault's current state. Returns a
+    summary whose ``valid`` is true only when the signature checks out *and* it covers the
+    journal's current head. With ``public_key`` (hex) it must also come from that key."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    data, _ = _load(vault, secret)
+    try:
+        sig = json.loads(read_regular(signature_path, 1 << 20))
+    except (json.JSONDecodeError, UnicodeError):
+        raise EvidenceError("Signature file does not contain valid JSON") from None
+    if not isinstance(sig, dict) or sig.get("signature_schema") != SIGNATURE_SCHEMA:
+        raise EvidenceError("Not an ENVY Evidence Vault journal signature")
+    try:
+        pub_bytes, sig_bytes = bytes.fromhex(sig["public_key"]), bytes.fromhex(sig["signature"])
+    except (ValueError, TypeError, KeyError):
+        raise EvidenceError("Malformed signature fields") from None
+    current_head = _journal_head(data)
+    matches_current = (sig.get("vault_id") == data["vault_id"]
+                       and sig.get("journal_head") == current_head
+                       and sig.get("revision") == data["revision"])
+    try:
+        Ed25519PublicKey.from_public_bytes(pub_bytes).verify(
+            sig_bytes, _signed_message(sig.get("vault_id"), sig.get("revision"), sig.get("journal_head")))
+        signature_ok = True
+    except (InvalidSignature, ValueError):
+        signature_ok = False
+    expected_ok = public_key is None or public_key.strip().lower() == sig["public_key"].lower()
+    return {"valid": bool(signature_ok and matches_current and expected_ok),
+            "signature_ok": signature_ok, "matches_current_journal": matches_current,
+            "expected_signer": expected_ok, "public_key": sig["public_key"],
+            "signed_journal_head": sig.get("journal_head"), "current_journal_head": current_head,
+            "signed_utc": sig.get("signed_utc"),
+            "note": "A valid signature attests who signed this journal state, not the origin of the "
+                    "evidence; confirm the public key belongs to who you expect."}
+
+
 # --- Vault layout ------------------------------------------------------------
 
 def _manifest_path(vault):
