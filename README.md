@@ -161,6 +161,18 @@ Security policy and private vulnerability reporting: **[SECURITY.md](SECURITY.md
 
 Planned work for **v0.3** — signed releases, PyPI, and bulk intake and a sign/verify panel in the GUI — is tracked in [#10](https://github.com/xzchick/envy-evidence-vault/issues/10).
 
+## Install on Linux
+
+One command (downloads the latest release bundle, verifies it against the signed
+`SHA256SUMS`, and installs under `~/.local` with a desktop entry — no root):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xzchick/envy-evidence-vault/main/install.sh | sh
+```
+
+Prefer to inspect first? Download `install.sh`, read it, then run `sh install.sh`.
+Uninstall instructions are printed at the end of a successful install.
+
 ## Verifying a release
 
 Each release's `SHA256SUMS.txt` is signed with [Sigstore](https://www.sigstore.dev/)
