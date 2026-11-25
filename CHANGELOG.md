@@ -2,7 +2,7 @@
 
 All notable changes to this project. This project adheres to semantic versioning.
 
-## Unreleased
+## v0.2.3 — 2026-11-24
 
 - Window: Intake folder takes in every file under a folder (recursively) as one revision
 - Window: Check hash list compares the vault with an outside SHA-256 list (plain, sha256sum output
@@ -11,6 +11,7 @@ All notable changes to this project. This project adheres to semantic versioning
   signature, optionally against an expected public key; it says when a genuine signature covers
   an earlier journal state
 - Offscreen GUI tests that drive the real window
+- Add a verified one-line Linux installer (`install.sh`)
 
 ## v0.2.2 — 2026-11-16
 
