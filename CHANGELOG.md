@@ -2,6 +2,16 @@
 
 All notable changes to this project. This project adheres to semantic versioning.
 
+## Unreleased
+
+- Window: Intake folder takes in every file under a folder (recursively) as one revision
+- Window: Check hash list compares the vault with an outside SHA-256 list (plain, sha256sum output
+  or CSV) and lists what's present, missing, or in the vault but not on the list
+- Window: a Sign journal tab to create an Ed25519 key, sign the custody journal, and verify a
+  signature, optionally against an expected public key; it says when a genuine signature covers
+  an earlier journal state
+- Offscreen GUI tests that drive the real window
+
 ## v0.2.2 — 2026-11-16
 
 - Attach a CycloneDX SBOM to each release (covered by the signed checksums)
