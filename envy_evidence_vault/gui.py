@@ -136,6 +136,7 @@ def _build():
             self.vault = None      # Path of the vault directory
             self.secret = None     # passphrase bytes, kept in memory for this vault only
             self.data = None       # decrypted, validated manifest dict
+            self.list_summary = "" # the latest hash-list check, shown in the header
             self.setWindowTitle("ENVY Evidence Vault")
             self.resize(1200, 900)
             self.setMinimumSize(980, 760)
@@ -156,7 +157,9 @@ def _build():
                                            ("Open vault", self.open_vault, "pick"),
                                            ("Lock", self.lock, "pick"),
                                            ("Intake file", self.intake_file, "go"),
+                                           ("Intake folder", self.intake_folder, "go"),
                                            ("Verify all", self.verify_all, "pick"),
+                                           ("Check hash list", self.check_hash_list, "pick"),
                                            ("Export report", self.export_report, "pick")):
                 b = QPushButton(caption); b.setObjectName(name)
                 b.setCursor(Qt.CursorShape.PointingHandCursor); b.clicked.connect(handler)
@@ -173,13 +176,16 @@ def _build():
             self.t_evidence = make_table(["File", "SHA-256 (original bytes)", "Size", "Custodian",
                                           "Intake UTC", "Last verified"])
             self.t_log = make_table(["UTC", "Event", "Title", "Custodian", "Detail"])
+            self.t_list = make_table(["Status", "SHA-256", "File in vault"])
             self.views.addTab(self.t_evidence, "Evidence")
             self.views.addTab(self.t_log, "Custody log")
+            self.views.addTab(self.t_list, "Hash list check")
             bl.addWidget(self.views, 3)
 
             self.forms = QTabWidget(); self.forms.setObjectName("tabs")
             self.forms.addTab(self._note_form(), "Add note")
             self.forms.addTab(self._transfer_form(), "Record transfer")
+            self.forms.addTab(self._sign_form(), "Sign journal")
             bl.addWidget(self.forms, 1)
 
             self.path_label = QLabel(""); self.path_label.setObjectName("foot")
@@ -223,6 +229,27 @@ def _build():
             form.addRow(self._tag("New custodian"), self.x_custodian)
             form.addRow(self._tag("Note (optional)"), self.x_note)
             row, self.x_status = self._submit_row("Record transfer in a new revision", self.add_transfer)
+            form.addRow(row)
+            return tab
+
+        def _sign_form(self):
+            tab = QWidget(); form = QFormLayout(tab); form.setSpacing(8)
+            note = QLabel("Sign the custody journal's current state with an Ed25519 key, or check a signature. "
+                          "A signature attests who signed this exact journal state, not where the evidence came from.")
+            note.setObjectName("status"); note.setWordWrap(True); form.addRow(note)
+            self.s_pubkey = self._field()
+            self.s_pubkey.setPlaceholderText("optional: the signer's public key (hex) to require when verifying")
+            form.addRow(self._tag("Expected signer"), self.s_pubkey)
+            row = QHBoxLayout()
+            for caption, handler, name in (("New signing key…", self.new_signing_key, "pick"),
+                                           ("Sign journal…", self.sign_journal, "go"),
+                                           ("Verify signature…", self.verify_signature_file, "go")):
+                b = QPushButton(caption); b.setObjectName(name)
+                b.setCursor(Qt.CursorShape.PointingHandCursor); b.clicked.connect(handler)
+                row.addWidget(b)
+            self.s_status = QLabel(""); self.s_status.setObjectName("status"); self.s_status.setWordWrap(True)
+            self.s_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            row.addWidget(self.s_status, 1)
             form.addRow(row)
             return tab
 
@@ -280,12 +307,15 @@ def _build():
             except EvidenceError as exc:
                 self._warn(str(exc)); return
             self.vault, self.secret, self.data = path, secret, data
+            self.list_summary = ""
+            self.t_list.setRowCount(0)
             self._set_enabled(True)
             self.refresh_views()
 
         def lock(self):
             self.vault = self.secret = self.data = None
-            for table in (self.t_evidence, self.t_log):
+            self.list_summary = ""
+            for table in (self.t_evidence, self.t_log, self.t_list):
                 table.setRowCount(0)
             self.vault_header.setPlainText("Locked. The passphrase was cleared from memory.")
             self.path_label.setText("")
@@ -314,6 +344,136 @@ def _build():
             self._warn(f"Intook {Path(source).name} ({result['size']} bytes).\n\n"
                        f"SHA-256: {result['object_sha256']}{dup}",
                        icon=QMessageBox.Icon.Information, title="File intaken")
+
+        def intake_folder(self):
+            if not self.data:
+                return
+            folder = QFileDialog.getExistingDirectory(self, "Choose a folder to intake (every file inside, recursively)")
+            if not folder:
+                return
+            custodian, ok = QInputDialog.getText(self, "Intake folder", "Custodian label (optional):")
+            if not ok:
+                return
+            note_text, ok2 = QInputDialog.getText(self, "Intake folder", "Note (optional):")
+            if not ok2:
+                return
+            result = self.intake_folder_values(folder, custodian, note_text)
+            if result:
+                dups = sum(1 for i in result["items"] if i["duplicate_object"])
+                extra = f"\n{dups} were already in the vault, so their existing objects were referenced." if dups else ""
+                self._warn(f"Intook {result['intaken']} file(s) from {Path(folder).name} as revision "
+                           f"{result['revision']}.{extra}", icon=QMessageBox.Icon.Information, title="Folder intaken")
+
+        def intake_folder_values(self, folder, custodian="", note_text=""):
+            """Intake every file under `folder` in one new revision. Returns the result, or None."""
+            try:
+                result = core.intake_dir(self.vault, folder, self.secret, custodian.strip(), note_text.strip())
+            except (EvidenceError, OSError) as exc:
+                self._warn(str(exc)); return None
+            self.data, _ = core._load(self.vault, self.secret)
+            self.refresh_views()
+            self.views.setCurrentIndex(0)
+            return result
+
+        def check_hash_list(self):
+            if not self.data:
+                return
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Choose a list of expected SHA-256 hashes (one per line, sha256sum output, or CSV)", "",
+                "Hash lists (*.txt *.sha256 *.csv *.lst);;All files (*)")
+            if path:
+                self.check_hash_list_file(path)
+
+        def check_hash_list_file(self, path):
+            """Compare the vault's objects with an outside hash list. Read-only. Returns the result."""
+            try:
+                lines = core.read_regular(path, 64 * 1024 * 1024).decode("utf-8", errors="replace").splitlines()
+                result = core.verify_against_list(self.vault, self.secret, lines)
+            except (EvidenceError, OSError) as exc:
+                self._warn(str(exc)); return None
+            rows = ([("present", e["object_sha256"], e["filename"], GREEN) for e in result["present"]]
+                    + [("missing", h, "— not in the vault", PINK) for h in result["missing"]]
+                    + [("not on list", e["object_sha256"], e["filename"], AMBER) for e in result["extra"]])
+            t = self.t_list; t.setRowCount(len(rows))
+            for i, (status, sha, name, color) in enumerate(rows):
+                t.setItem(i, 0, self._cell(status, color)); t.setItem(i, 1, self._cell(sha))
+                t.setItem(i, 2, self._cell(name))
+            t.resizeColumnsToContents(); t.horizontalHeader().setStretchLastSection(True)
+            self.views.setCurrentIndex(2)
+            verdict = ("Every expected file is in the vault, and nothing else is." if result["match"] else
+                       f"{len(result['present'])} present, {len(result['missing'])} missing, "
+                       f"{len(result['extra'])} in the vault but not on the list.")
+            self.list_summary = f"Hash list {Path(path).name}: {result['expected']} expected. {verdict}"
+            self.refresh_views()
+            return result
+
+        # ----- journal signatures ------------------------------------------
+        def new_signing_key(self):
+            dest, _ = QFileDialog.getSaveFileName(self, "Save a new Ed25519 signing key (keep it private)",
+                                                  "evidence-signing.key", "Signing key (*.key);;All files (*)")
+            if dest:
+                self.make_signing_key(dest)
+
+        def make_signing_key(self, dest):
+            try:
+                result = core.generate_signing_key(dest)
+            except (EvidenceError, OSError) as exc:
+                self._sign_status(str(exc), PINK); return None
+            self._sign_status(f"New key saved (private, keep it safe). Share this public key with verifiers: "
+                              f"{result['public_key']}", CYAN)
+            return result
+
+        def sign_journal(self):
+            if not self.data:
+                return
+            key, _ = QFileDialog.getOpenFileName(self, "Choose your Ed25519 signing key", "",
+                                                 "Signing key (*.key);;All files (*)")
+            if not key:
+                return
+            dest, _ = QFileDialog.getSaveFileName(self, "Save the journal signature",
+                                                  f"journal-r{self.data['revision']}.sig.json",
+                                                  "Signature (*.json);;All files (*)")
+            if dest:
+                self.sign_with(key, dest)
+
+        def sign_with(self, key, dest):
+            try:
+                result = core.sign_journal(self.vault, self.secret, key, dest)
+            except (EvidenceError, OSError, ValueError) as exc:
+                self._sign_status(str(exc), PINK); return None
+            self._sign_status(f"Signed revision {self.data['revision']} (journal head {result['journal_head'][:16]}…) "
+                              f"with key {result['public_key'][:16]}…. Nothing in the vault changed.", CYAN)
+            return result
+
+        def verify_signature_file(self):
+            if not self.data:
+                return
+            sig, _ = QFileDialog.getOpenFileName(self, "Choose a journal signature", "",
+                                                 "Signature (*.json);;All files (*)")
+            if sig:
+                self.verify_signature(sig)
+
+        def verify_signature(self, sig):
+            expected = self.s_pubkey.text().strip() or None
+            try:
+                result = core.verify_journal_signature(self.vault, self.secret, sig, expected)
+            except (EvidenceError, OSError) as exc:
+                self._sign_status(str(exc), PINK); return None
+            if result["valid"]:
+                msg, color = (f"Valid: signed by {result['public_key'][:16]}… over this exact journal state "
+                              f"({result['signed_utc']}).", GREEN)
+            elif not result["signature_ok"]:
+                msg, color = "Invalid: the signature doesn't check out.", PINK
+            elif not result["matches_current_journal"]:
+                msg, color = ("The signature is genuine but covers an earlier journal state; the journal has "
+                              "changed since it was signed.", AMBER)
+            else:
+                msg, color = "The signature is genuine but from a different key than the expected signer.", PINK
+            self._sign_status(msg, color)
+            return result
+
+        def _sign_status(self, text, color):
+            self.s_status.setText(text); self.s_status.setStyleSheet(f"#status{{color:{color};}}")
 
         def verify_all(self):
             if not self.data:
@@ -391,7 +551,7 @@ def _build():
             total = sum(e["size"] for e in ev)
             self.vault_header.setPlainText(
                 f"{d['title']}  ·  revision {d['revision']}  ·  {len(ev)} object(s)  ·  {total:,} bytes\n"
-                f"Vault: {d['vault_id']}")
+                f"Vault: {d['vault_id']}" + (f"\n{self.list_summary}" if self.list_summary else ""))
             self._fill_evidence(ev)
             self._fill_log(core.custody_log(d))
             if self.vault:
